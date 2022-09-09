@@ -1,0 +1,17 @@
+
+#!/bin/bash
+
+echo "Simulation_folder;Bc>Gg;Bc>Gg_&_Ec>Bc;Bc>Gg_&_Ec>Bc_&_Cd<iOD;Shannon_index;Avg_suppr"
+for i in `ls $1`
+do
+  	#echo "Subfolder: $i"
+        num1=$(awk '$1 == 23' $1/$i/abundance.txt | awk '$3 > $4' | wc -l)
+        #echo "Number of simulations with Bc > Gg: $num"
+        num2=$(awk '$1 == 23' $1/$i/abundance.txt | awk '$3 > $4' | awk '$3 < $5' | wc -l)
+        #echo "Out of those where Ec > Bc: $num"
+        num3=$(awk '$1 == 23' $1/$i/abundance.txt | awk '$3 > $4' | awk '$3 < $5' | awk '$6 < 0.09' | wc -l)
+        num4=$(awk '$1 == 23' $1/$i/abundance.txt | awk '$3 > $4' | awk '$3 < $5' | awk '{sum=$3+$4+$5;normBc=$3/sum;normGg=$4$
+        num5=$(echo "$num4 / $num2" | bc -l)
+        num6=$(echo "$num3 / $num2" | bc -l)
+        echo "$i;$num1;$num2;$num3;$num5;$num6"
+done
