@@ -1,0 +1,62 @@
+#making networks of co-correlation data of C. diff project
+
+# flattenCorrMatrix
+# ++++++++++++++++++++++++++++
+# cormat : matrix of the correlation coefficients
+# pmat : matrix of the correlation p-values
+
+
+flattenCorrMatrix <- function(cormat, pmat) {
+  ut <- upper.tri(cormat)
+  data.frame(
+    row = rownames(cormat)[row(cormat)[ut]],
+    column = rownames(cormat)[col(cormat)[ut]],
+    cor  =(cormat)[ut],
+    p = pmat[ut]
+  )
+}
+
+install.packages("Hmisc")
+library("Hmisc")
+
+C_diff_1<-(relative_abundances_all[,c(2,4:17)])
+View(C_diff_1)
+#Now with both +AB treatments (since C diff is suppressed, we expect it to make a minor difference for the parsimonious network)
+C_diff_2<-(C_diff_1[c(133:396),c(2:15)])   
+View(C_diff_2)
+#Now only the parsimonious network species + F sacch
+C_diff_3<-(C_diff_2[,c(1:2,4,10,12)])
+View(C_diff_3)
+#everyone that is nonzero
+C_diff_4<-(C_diff_2[,c(1:2,4,10:12)])
+x <-(as.matrix(C_diff_4))
+res2<-rcorr(x, type = "spearman")
+res2
+
+correlation_matrix<-flattenCorrMatrix(res2$r, res2$P)
+write.csv(correlation_matrix,"Downloads/corr_matrix.csv", row.names = FALSE)
+
+install.packages("igraph")
+library("igraph")
+
+# Subset res for only the coefficient
+res3<-res2$r
+res3
+# Turn into absolute values (for network construction)
+res4<-abs(res3)
+
+# Subset for correlation coefficients with p<0.05 (discard unsignificant ones)
+res4[res4<0.3] <-0
+res4
+
+
+# Make an Igraph object from this matrix:
+network <- graph_from_adjacency_matrix(res4, weighted=T, mode="undirected", diag=F)
+# Basic chart
+plot(network)
+
+correlation_matrix<-flattenCorrMatrix(res2$r, res2$P)
+write.csv(correlation_matrix,"Downloads/corr_matrix.csv", row.names = FALSE)
+
+
+cor.test(S_corr_Ia$s_Shannon, S_corr_Ia$R_Shannon, method = "spearman")
