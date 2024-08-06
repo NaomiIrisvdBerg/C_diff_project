@@ -1,0 +1,382 @@
+args = commandArgs(trailingOnly=TRUE)
+
+##used packages: 
+library(dplyr)
+library(deSolve)
+library(tidyverse)
+
+##Import input files before starting to model 
+#Carrying capacities (community maxOD), import the file
+OD_community_Mix14 <- read_csv("OD_community_Mix14.csv")
+#Growth kinetics (species monoculture max growth rate and maxOD), import the file
+filtered_growth_rates <- read_csv("filtered_growth_rates.csv")
+
+#View(OD_community_Mix14)
+#Subset using the dplyr package to get the AB treated communities only
+subset_data <- OD_community_Mix14 %>%
+  filter(Conditions_Explained %in% c("Mix-14_Antibiotics", "Mix-14_Antibiotics_C.difficile")) %>%
+  pull(`Day 23`)
+
+# Calculate these outside the odes function, as they do not change every time
+mean_K_C_difficile <- filtered_growth_rates$maxOD[filtered_growth_rates$Species == "C.difficile"]
+sd_K_C_difficile <- filtered_growth_rates$sd_maxOD[filtered_growth_rates$Species == "C.difficile"]
+
+odes <- function(t, state, parameters) {
+  # Unpack state variables
+  species <- as.numeric(state) 
+  
+  # Unpack parameters
+  r <- parameters$r
+  a <- parameters$a
+  K <- parameters$K
+  K_C_difficile <- rnorm(1, mean = mean_K_C_difficile, sd = sd_K_C_difficile)
+  
+  # Indices for species
+  index_of_Cd <- 2  # C.difficile
+  index_of_Ec <- 3  # E.coli
+  index_of_Fs <- 4  # F.saccharivorans
+  
+  # Calculate N, the sum of all species
+  N <- sum(species)
+  
+  # Initialize rate changes
+  dSpecies.dt <- numeric(length(species))
+  
+  # Handle the C.difficile case separately
+  interaction_term_Cd <- sum(a[index_of_Cd,] * species) - a[index_of_Cd, index_of_Cd] * species[index_of_Cd]
+  growth_multiplier_Cd <- 1  # No antibiotic effect for C.difficile since introduced after AB have been flushed out
+  dSpecies.dt[index_of_Cd] <- ((r[index_of_Cd] + interaction_term_Cd) * species[index_of_Cd] * (1 - (species[index_of_Cd]/K_C_difficile))) * growth_multiplier_Cd - rnorm(1, mean = 3, sd = 0.02) * species[index_of_Cd]
+  
+  for(i in 1:length(species)) {
+    if (i != index_of_Cd) {  # Avoid redoing C.difficile
+      interaction_term <- sum(a[i,] * species) - a[i,i] * species[i]
+      
+      # Determine the antibiotic effect multiplier for the assumed sensitive species
+      if (i == index_of_Ec) {
+        growth_multiplier <- ifelse(t >= 8 && t <= 12, 0.6, 1)
+      } else if (i == index_of_Fs) {
+        growth_multiplier <- ifelse(t >= 8 && t <= 12, 0, 1)
+      } else {
+        growth_multiplier <- 1
+      }
+      
+      dSpecies.dt[i] <- ((r[i] + interaction_term) * species[i] * (1-(N/K))) * growth_multiplier - rnorm(1, mean = 3, sd = 0.02) * species[i]
+    }
+  }
+  
+  return(list(dSpecies.dt))
+}
+
+#mean_K_C_difficile <- filtered_growth_rates_ordered$maxOD[filtered_growth_rates_ordered$Species == "C.difficile"]
+#sd_K_C_difficile <- filtered_growth_rates_ordered$sd_maxOD[filtered_growth_rates_ordered$Species == "C.difficile"]
+
+# Number of simulations (limit to 15000 at once if ran locally; do this 10 independent times and bind the results to achieve 1500000 sims total)
+num_simulations <- 15000
+
+#results_df <- data.frame(matrix(ncol = 46))
+results_df <- data.frame(
+  Simulation = numeric(0),
+  
+  # Interaction coefficients
+  Interaction_Bcaccae_Bcaccae = numeric(0),
+  Interaction_Bcaccae_Cdifficile = numeric(0),
+  Interaction_Bcaccae_Ecoli = numeric(0),
+  Interaction_Bcaccae_Fsaccharivorans = numeric(0),
+  Interaction_Bcaccae_SECcluster = numeric(0),
+  
+  Interaction_Cdifficile_Bcaccae = numeric(0),
+  Interaction_Cdifficile_Cdifficile = numeric(0),
+  Interaction_Cdifficile_Ecoli = numeric(0),
+  Interaction_Cdifficile_Fsaccharivorans = numeric(0),
+  Interaction_Cdifficile_SECcluster = numeric(0),
+  
+  Interaction_Ecoli_Bcaccae = numeric(0),
+  Interaction_Ecoli_Cdifficile = numeric(0),
+  Interaction_Ecoli_Ecoli = numeric(0),
+  Interaction_Ecoli_Fsaccharivorans = numeric(0),
+  Interaction_Ecoli_SECcluster = numeric(0),
+  
+  Interaction_Fsaccharivorans_Bcaccae = numeric(0),
+  Interaction_Fsaccharivorans_Cdifficile = numeric(0),
+  Interaction_Fsaccharivorans_Ecoli = numeric(0),
+  Interaction_Fsaccharivorans_Fsaccharivorans = numeric(0),
+  Interaction_Fsaccharivorans_SECcluster = numeric(0),
+  
+  Interaction_SECcluster_Bcaccae = numeric(0),
+  Interaction_SECcluster_Cdifficile = numeric(0),
+  Interaction_SECcluster_Ecoli = numeric(0),
+  Interaction_SECcluster_Fsaccharivorans = numeric(0),
+  Interaction_SECcluster_SECcluster = numeric(0),
+  
+  # Growth Rates
+  Growth_Rate_Bcaccae = numeric(0),
+  Growth_Rate_Cdifficile = numeric(0),
+  Growth_Rate_Ecoli = numeric(0),
+  Growth_Rate_Fsaccharivorans = numeric(0),
+  Growth_Rate_SECcluster = numeric(0),
+  
+  # Final ODs
+  Final_OD_Bcaccae = numeric(0),
+  Final_OD_Cdifficile = numeric(0),
+  Final_OD_Ecoli = numeric(0),
+  Final_OD_Fsaccharivorans = numeric(0),
+  Final_OD_SECcluster = numeric(0),
+  Final_OD_Community = numeric(0),
+  
+  # Relative Abundances
+  Relative_Abundance_Bcaccae = numeric(0),
+  Relative_Abundance_Cdifficile = numeric(0),
+  Relative_Abundance_Ecoli = numeric(0),
+  Relative_Abundance_Fsaccharivorans = numeric(0),
+  Relative_Abundance_SECcluster = numeric(0),
+  
+  # Computed statistics
+  Shannon_Index = numeric(0),
+  Ratio = numeric(0),
+  Suppressiveness = numeric(0),
+  Ranks_correct = numeric(0)
+)
+
+write(colnames(results_df), file = paste0("simulation_results_",args[1],".txt"), ncolumns = length(colnames(results_df)))
+
+filtered_growth_rates_ordered <- filtered_growth_rates %>%
+  dplyr::arrange(match(Species, c("B.caccae", "C.difficile", "E.coli", "F.saccharivorans", "SEC.cluster")))
+
+
+###Within each sim, we pull the growth rates from the normal distributions, and pull interaction coefficients from the uniform distributions
+for (j in 1:num_simulations) {
+  
+  # Inherent growth rates
+  r <- abs(rnorm(5, mean = filtered_growth_rates_ordered$max_growth_rate, sd = filtered_growth_rates_ordered$sd_max_growth_rate))
+  
+  
+  # Interaction coefficients matrix, where the effects are made relative to the subjected species' own growth rate
+  # so that the interaction effect can be seen as: 1 unit of the exerting species corresponds to ±10% of the subjected species' growth rate being impacted
+  # For interactions for which we have no clear hypothesis for interaction direction: rnorm(1, mean = 0, sd = 0.2); i.e., verging on the neutral side
+  # Self-effects are considered neutral, except for those whose monoculture performance was significantly less than co-culture performance
+  a <- matrix(c(
+    # B.caccae interactions
+    0, 
+    runif(1, min = 0.01, max = 1) * r[1], 
+    runif(1, min = 0.01, max = 1) * r[1], 
+    -runif(1, min = 0.01, max = 1) * r[1], 
+    runif(1, min = 0.01, max = 1) * r[1], 
+    # C.difficile interactions 
+    -runif(1, min = 0.01, max = 1) * r[2], 
+    0, 
+    rnorm(1, mean = 0, sd = 0.2) * r[2], 
+    rnorm(1, mean = 0, sd = 0.2) * r[2], 
+    -runif(1, min = 0.01, max = 1) * r[2],
+    # E.coli interactions
+    runif(1, min = 0.01, max = 1) * r[3], 
+    rnorm(1, mean = 0, sd = 0.2) * r[3], 
+    0, 
+    rnorm(1, mean = 0, sd = 0.2) * r[3], 
+    runif(1, min = 0.01, max = 1) * r[3], 
+    # F.saccharivorans interactions
+    -runif(1, min = 0.01, max = 1) * r[4], 
+    -runif(1, min = 0.01, max = 1) * r[4], 
+    runif(1, min = 0.01, max = 1) * r[4], 
+    runif(1, min = 0.01, max = 1) * r[4], 
+    rnorm(1, mean = 0, sd = 0.2) * r[4], 
+    # SEC.cluster interactions
+    runif(1, min = 0.01, max = 1) * r[5], 
+    rnorm(1, mean = 0, sd = 0.2) * r[5], 
+    rnorm(1, mean = 0, sd = 0.2) * r[5], 
+    -runif(1, min = 0.01, max = 1) * r[5], 
+    -runif(1, min = 0.01, max = 1) * r[5]
+    
+  ), nrow=5, byrow=TRUE)
+  
+  #diag(a) <- 1/3  # setting self-inhibition coefficients to 1, but lower a little to reduce slowdown of growth by logistic function 
+  #(and thus the slowdown leading to the population growth not being able to keep up with the dilution rate)
+  #hence we divide the self-inhibition by the dilution rate
+  
+  # Carrying capacities (community maxOD)
+  mean_OD_day23 <- mean(subset_data, na.rm = TRUE)
+  sd_OD_day23 <- sd(subset_data, na.rm = TRUE)
+  
+  K <- abs(rnorm(1, mean = mean_OD_day23, sd = sd_OD_day23))
+  
+  #K<- 10
+  #K <- rnorm(mean = filtered_growth_rates_ordered$maxOD, sd = filtered_growth_rates_ordered$sd_maxOD)
+  #K <- rnorm(5, mean = filtered_growth_rates_ordered$maxOD, sd = filtered_growth_rates_ordered$sd_maxOD)
+  #K <- filtered_growth_rates_ordered$maxOD  # maxOD represents the carrying capacity for each species
+  
+  parameters <- list(r = r, a = a, K = K)
+  
+  # Initial conditions
+  initial_conditions <- c(0.01, 0, 0.01, 0.01, 0.01)
+  
+  
+  ##
+  times1 <- seq(0, 13, by = 0.01) # define the time sequence up to day 13
+  result1 <- ode(y = initial_conditions, times = times1, func = odes, parms = parameters)
+  
+  last_state <- tail(result1[,2:6], 1)
+  last_state[2] <- 0.01  # Introduce C.difficile load of 0.01 at day 13
+  
+  times2 <- seq(13, 23, by = 0.01) #sim continuation until day 23
+  result2 <- ode(y = as.numeric(last_state), times = times2, func = odes, parms = parameters)
+  
+  
+  full_result <- rbind(result1, result2[-1,])  # we remove the first row of result2 to avoid duplicating day 13
+  
+  # Check if the result contains NAs (indicating an unstable system)
+  if (any(is.na(full_result))) {
+    # If unstable, skip this iteration
+    next
+  }
+  
+  # Grab the last row of the full_result for the end-point values
+  final_state <- tail(full_result, 1)
+  
+  # Final ODs
+  final_ODs <- final_state[2:6]
+  
+  # Final OD for the entire community
+  final_OD_community <- sum(final_ODs)
+  
+  # Check if the community OD is less than 0
+  if (final_OD_community < 0) {
+    # If less than 0, skip this iteration
+    next
+  }
+  
+  # Calculate relative abundances
+  relative_abundances <- final_ODs / final_OD_community
+  if (any(relative_abundances<0)) {
+    # If negative relative abundances are negative beyond what might be explained by fluctuations in dilution
+    next
+  }
+  
+  #Skip sim if B. caccae is not big enough to represent a realistic interaction network producing observed findings
+  if (relative_abundances[1] < 0.2) {
+    next
+  }
+  
+  #Skip sim if SEC cluster is not big enough to represent a realistic interaction network producing observed findings
+  if (relative_abundances[5] < 0.02) {
+    next
+  }
+  
+  # Shannon-indexed alpha diversity calculation
+  shannon_index <- -sum((abs(relative_abundances) + 1e-10) * log(abs(relative_abundances) + 1e-10))
+  
+  # If Shannon index is negative, skip this simulation
+  if (shannon_index < 0) {
+    next
+  }
+  
+  # Ratio calculation E. coli : (SEC.cluster + B.caccae)
+  ratio <- relative_abundances[3] / ((relative_abundances[5] + relative_abundances[1]) + 1e-10)
+  
+  
+  
+  # Suppressiveness: does C. diff achieve greater final OD than it is inoculated with? Then successful in settling in (community not suppressive)
+  suppressiveness <- ifelse(final_ODs[2] > 0.01, 0, 1)  # 0 = not suppressive, 1 = suppressive
+  
+  # Rank_correct: Check the ranking of the species by abundance: Is E. coli > B. caccae and/or SEC cluster?
+  #ranked_species <- order(-final_ODs)
+  ranks_correct <- ifelse(relative_abundances[3]>relative_abundances[1] & relative_abundances[3]>relative_abundances[5], 1, 0)  # 1 = correct, 0 = incorrect
+  
+  if (ranks_correct == 0) {
+    next
+  }
+  
+  interaction_coeffs <- as.numeric(t(a))
+  names(interaction_coeffs) <- c(
+    "Interaction_Bcaccae_Bcaccae", 
+    "Interaction_Bcaccae_Cdifficile", 
+    "Interaction_Bcaccae_Ecoli", 
+    "Interaction_Bcaccae_Fsaccharivorans", 
+    "Interaction_Bcaccae_SECcluster", 
+    "Interaction_Cdifficile_Bcaccae", 
+    "Interaction_Cdifficile_Cdifficile", 
+    "Interaction_Cdifficile_Ecoli", 
+    "Interaction_Cdifficile_Fsaccharivorans", 
+    "Interaction_Cdifficile_SECcluster", 
+    "Interaction_Ecoli_Bcaccae", 
+    "Interaction_Ecoli_Cdifficile", 
+    "Interaction_Ecoli_Ecoli", 
+    "Interaction_Ecoli_Fsaccharivorans", 
+    "Interaction_Ecoli_SECcluster", 
+    "Interaction_Fsaccharivorans_Bcaccae", 
+    "Interaction_Fsaccharivorans_Cdifficile", 
+    "Interaction_Fsaccharivorans_Ecoli", 
+    "Interaction_Fsaccharivorans_Fsaccharivorans", 
+    "Interaction_Fsaccharivorans_SECcluster", 
+    "Interaction_SECcluster_Bcaccae", 
+    "Interaction_SECcluster_Cdifficile", 
+    "Interaction_SECcluster_Ecoli", 
+    "Interaction_SECcluster_Fsaccharivorans", 
+    "Interaction_SECcluster_SECcluster"
+  )
+  
+  # Create a new row for the dataframe
+  new_row <- data.frame(
+    Simulation = j,
+    
+    Interaction_Bcaccae_Bcaccae = a[1, 1],
+    Interaction_Bcaccae_Cdifficile = a[1, 2],
+    Interaction_Bcaccae_Ecoli = a[1, 3],
+    Interaction_Bcaccae_Fsaccharivorans = a[1, 4],
+    Interaction_Bcaccae_SECcluster = a[1, 5],
+    
+    Interaction_Cdifficile_Bcaccae = a[2, 1],
+    Interaction_Cdifficile_Cdifficile = a[2, 2],
+    Interaction_Cdifficile_Ecoli = a[2, 3],
+    Interaction_Cdifficile_Fsaccharivorans = a[2, 4],
+    Interaction_Cdifficile_SECcluster = a[2, 5],
+    
+    Interaction_Ecoli_Bcaccae = a[3, 1],
+    Interaction_Ecoli_Cdifficile = a[3, 2],
+    Interaction_Ecoli_Ecoli = a[3, 3],
+    Interaction_Ecoli_Fsaccharivorans = a[3, 4],
+    Interaction_Ecoli_SECcluster = a[3, 5],
+    
+    Interaction_Fsaccharivorans_Bcaccae = a[4, 1],
+    Interaction_Fsaccharivorans_Cdifficile = a[4, 2],
+    Interaction_Fsaccharivorans_Ecoli = a[4, 3],
+    Interaction_Fsaccharivorans_Fsaccharivorans = a[4, 4],
+    Interaction_Fsaccharivorans_SECcluster = a[4, 5],
+    
+    Interaction_SECcluster_Bcaccae = a[5, 1],
+    Interaction_SECcluster_Cdifficile = a[5, 2],
+    Interaction_SECcluster_Ecoli = a[5, 3],
+    Interaction_SECcluster_Fsaccharivorans = a[5, 4],
+    Interaction_SECcluster_SECcluster = a[5, 5],
+    
+    
+    Growth_Rate_Bcaccae = r[1],
+    Growth_Rate_Cdifficile = r[2],
+    Growth_Rate_Ecoli = r[3],
+    Growth_Rate_Fsaccharivorans = r[4],
+    Growth_Rate_SECcluster = r[5],
+    
+    Final_OD_Bcaccae = final_ODs[1],
+    Final_OD_Cdifficile = final_ODs[2],
+    Final_OD_Ecoli = final_ODs[3],
+    Final_OD_Fsaccharivorans = final_ODs[4],
+    Final_OD_SECcluster = final_ODs[5],
+    Final_OD_Community = final_OD_community,
+    
+    Relative_Abundance_Bcaccae = final_ODs[1]/final_OD_community,
+    Relative_Abundance_Cdifficile = final_ODs[2]/final_OD_community,
+    Relative_Abundance_Ecoli = final_ODs[3]/final_OD_community,
+    Relative_Abundance_Fsaccharivorans = final_ODs[4]/final_OD_community,
+    Relative_Abundance_SECcluster = final_ODs[5]/final_OD_community,
+    
+    Shannon_Index = shannon_index,
+    Ratio = ratio,
+    Suppressiveness = suppressiveness,
+    Ranks_correct = ranks_correct
+  )
+  
+  # Append the new row to the results dataframe
+  # results_df <- rbind(results_df, new_row)
+  write(as.vector(unlist(new_row[1,])), file = paste0("simulation_results_",args[1],".txt"), ncolumns = length(as.vector(unlist(new_row[1,]))), append = TRUE)
+  
+}  # Close the loop
+
+# write.table(results_df, paste0("simulation_results_",args[1],".txt"), row.names = FALSE)
