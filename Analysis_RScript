@@ -7327,7 +7327,7 @@ View(RBX2660_wide_data)
 RBX2660_wide_data$Sum <- rowSums(RBX2660_wide_data[, 8:140], na.rm = TRUE)
 RBX2660_wide_data$Adjustment_factor <- 100 / RBX2660_wide_data$Sum
 
-#take out patients where at least 50% of the relative abundance space was defined by fungi or viruses, since these are
+#take out patients where at only 2/3 of the relative abundance space was defined by bacteria, and rest by fungi or viruses, since these are
 #relative abundance profiles that are confounded:
 RBX2660_wide_data <- RBX2660_wide_data %>%
   dplyr::filter(Adjustment_factor <= 1.5)
